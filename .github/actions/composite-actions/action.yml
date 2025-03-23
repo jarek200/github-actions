@@ -1,0 +1,20 @@
+name: 'Greet User (Composite)'
+description: 'Greets a user using a composite action'
+inputs:
+  name:
+    description: 'Name of the person to greet'
+    required: true
+    default: 'World'
+
+runs:
+  using: composite
+  steps:
+    - name: Greet
+      shell: bash
+      run: echo "👋 Hello, ${{ inputs.name }}! Greetings from a Composite Action."
+    
+    - name: Show Date
+      shell: bash
+      run: |
+        echo "Current date and time: $(date)"
+        echo "Running on: $(uname -a)" 

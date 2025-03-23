@@ -1,0 +1,11 @@
+name: "Greet User (Docker)"
+description: "Prints a greeting from inside a Docker container"
+inputs:
+  name:
+    description: "Name of the user"
+    required: true
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  args:
+    - ${{ inputs.name }}
