@@ -1,0 +1,30 @@
+name: Act Local Test
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  local-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Simple shell command
+        run: |
+          echo "This is a local test"
+          pwd
+          ls -la
+
+      - name: Test Docker Action
+        uses: ./.github/actions/docker-actions
+        with:
+          who-to-greet: "Act Test User"
+
+      # Basic environment testing
+      - name: Test Environment
+        run: |
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "RUNNER_OS: $RUNNER_OS"
+          echo "PATH: $PATH" 

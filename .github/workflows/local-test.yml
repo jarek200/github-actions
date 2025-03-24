@@ -1,0 +1,33 @@
+name: Local Testing Workflow
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  test-locally:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test Docker Action
+        uses: ./.github/actions/docker-actions
+        with:
+          who-to-greet: "Local Docker User"
+
+      - name: Test JavaScript Action
+        uses: ./.github/actions/js-actions
+        with:
+          name: "Local JS User"
+
+      - name: Test Composite Action
+        uses: ./.github/actions/composite-actions
+        with:
+          name: "Local Composite User"
+
+      - name: Run some local commands
+        run: |
+          echo "Running local commands"
+          pwd
+          ls -la 
