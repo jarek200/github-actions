@@ -9,6 +9,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
+      - name: Debug - List files
+        run: |
+          ls -la .github/actions/docker-actions/
+          cat .github/actions/docker-actions/entrypoint.sh
+      
       - name: Run Docker greeting action
         uses: ./.github/actions/docker-actions
         with:
