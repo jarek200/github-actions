@@ -1,0 +1,37 @@
+name: AI Review Bot - C-3PR
+
+on:
+  pull_request:
+    types:
+      - review_requested
+
+permissions:
+  id-token: write
+  security-events: write
+  actions: read
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout action repository
+        uses: actions/checkout@v2
+        with:
+          repository: aerstudios/github-actions
+          token: ${{ secrets.AER_PR_BOT_PAT }}
+          path: ./actions
+
+      - name: Configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE }}
+          aws-region: us-east-1
+          role-session-name: GitHubActionScript
+
+      - name: Run AI PR bot action
+        uses: ./actions/ai-pr-bot
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}

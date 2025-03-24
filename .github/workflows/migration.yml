@@ -1,0 +1,49 @@
+name: Migrate Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_env:
+        description: "Select the source environment"
+        required: true
+        type: choice
+        options:
+          - int
+          - stage
+          - prod
+      target_env:
+        description: "Select the target environment"
+        required: true
+        type: choice
+        options:
+          - int
+          - stage
+          - prod
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Validate Input Environments
+        run: |
+          if [ "${{ github.event.inputs.source_env }}" = "${{ github.event.inputs.target_env }}" ]; then
+            echo "Source and Target environments cannot be the same."
+            exit 1
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: ${{ secrets.OIDC_ROLE_ARN_PROD }}
+          aws-region: eu-west-2
+
+      - name: Run Migration Script
+        run: |
+          .tools/devops/container-exec/migrate.sh "${{ github.event.inputs.source_env }}" "${{ github.event.inputs.target_env }}"

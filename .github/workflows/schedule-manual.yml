@@ -1,0 +1,28 @@
+name: Schedule and Manual Triggers
+on:
+#   schedule:
+#     - cron: '0 0 * * *'    # Daily at midnight
+#     - cron: '0 12 * * MON' # Every Monday at noon
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        type: boolean
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to environment
+        run: |
+          echo "Deploying to ${{ inputs.environment }}"
+          echo "Debug mode: ${{ inputs.debug }}" 

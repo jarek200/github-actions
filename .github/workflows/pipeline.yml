@@ -1,0 +1,402 @@
+name: "Deploy using Github Flow"
+
+on:
+    pull_request:
+        types:
+            - labeled
+
+concurrency:
+    group: deployment-pipeline #should only ever run one run at a time
+
+env:
+    AWS_REGION: eu-west-2
+
+jobs:
+    _init_check_command:
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: write
+            pull-requests: write
+            issues: write
+        name: Check Command
+        outputs:
+            action: ${{ steps.parse-action.outputs.result }}
+            environment: ${{ steps.parse-environment.outputs.result }}
+        steps:
+            - name: Show GitHub context
+              env:
+                  GITHUB_CONTEXT: ${{ toJson(github) }}
+              run: echo "$GITHUB_CONTEXT"
+            - uses: actions-ecosystem/action-remove-labels@v1
+              with:
+                  labels: "PIPELINE ERROR"
+                  fail_on_error: false
+            - name: Parse Action
+              id: parse-action
+              uses: actions/github-script@v6
+              env:
+                  LABEL: "${{ github.event.label.name }}"
+              with:
+                  result-encoding: string
+                  script: |
+                      const actions = ['PLAN', 'APPLY']
+                      const {LABEL} = process.env;
+                      const arrLabel = LABEL.split(" ");
+                      const action = arrLabel[1];
+                      console.log(action)
+                      if( actions.includes(action)){
+                          console.log(`::notice::action: ${action}`)
+                      }else{
+                          console.info(`::notice::Ignoring Label: ${LABEL}`)
+                          process.exit(0)
+                      }
+                      return action
+            - name: Parse Environment
+              id: parse-environment
+              uses: actions/github-script@v6
+              env:
+                  LABEL: "${{ github.event.label.name }}"
+              with:
+                  result-encoding: string
+                  script: |
+                      const environments = ['int', 'stage', 'prod', 'ops']
+                      const {LABEL} = process.env;
+                      const arrLabel = LABEL.split(" ");
+                      const environment = arrLabel[2];
+                      console.log(environment)
+                      if(environments.includes(environment)){
+                          console.log(`::notice::environment: ${environment}`)
+                      }else{
+                          console.info(`::notice::Ignoring Label: ${LABEL}`)
+                          process.exit(0)
+                      }
+                      return environment
+
+            - name: Clone Repo
+              id: clone-repo
+              uses: actions/checkout@v3
+              with:
+                  ref: ${{ github.head_ref }}
+            - name: Merge from Main
+              id: merge-from-target
+              uses: devmasx/merge-branch@master
+              with:
+                  type: now
+                  from_branch: ${{ github.base_ref }}
+                  target_branch: ${{ github.head_ref }}
+                  github_token: ${{ github.token }}
+            - name: Quit if merge error
+              if: ${{ steps.merge-from-target.result == 'failure' }}
+              run:
+                  echo "::error:Merging from target branch failed, merge target
+                  into this branch and return to 1. PLAN int" && exit 1
+            - name: Commit any merge changes
+              uses: stefanzweifel/git-auto-commit-action@v4
+              with:
+                  commit_message:
+                      "Updates from merging target into branch in pipeline run"
+            - name: Assume role for OPS AWS acc
+              uses: aws-actions/configure-aws-credentials@v1-node16
+              with:
+                  role-to-assume:
+                      ${{ secrets.OIDC_ROLE_ARN_OPS }}
+                  aws-region: ${{ env.AWS_REGION }}
+            - name: Check previous env sha
+              id: check-previous-env-sha
+              run: |
+                  paramName=""
+                  if [ "${{steps.parse-label.outputs.environment}}" == "int" ]; then
+                    if [ "${{steps.parse-label.outputs.action}}" == "APPLY" ]; then
+                      paramName="current-sha-space-heyflow-web-int-PLAN"
+                    fi
+                   elif [ "${{steps.parse-label.outputs.environment}}" == "stage" ]; then
+                     if [ "${{steps.parse-label.outputs.action}}" == "PLAN" ]; then
+                      paramName="current-sha-space-heyflow-web-int-APPLY"
+                    elif [ "${{steps.parse-label.outputs.action}}" == "APPLY" ]; then
+                      paramName="current-sha-space-heyflow-web-stage-PLAN"
+                    fi
+                  elif [ "${{steps.parse-label.outputs.environment}}" == "prod" ]; then
+                    if [ "${{steps.parse-label.outputs.action}}" == "PLAN" ]; then
+                      paramName="current-sha-space-heyflow-web-stage-APPLY"
+                    elif [ "${{steps.parse-label.outputs.action}}" == "APPLY" ]; then
+                      paramName="current-sha-space-heyflow-web-prod-PLAN"
+                    fi
+                  fi
+                  echo "param to check is: $paramName"
+                  if [ "$paramName" != "" ]; then
+                    echo "checking param store for sha"
+                    ssm=$(aws ssm get-parameters --names "$paramName")
+                    sha=$(echo $ssm | jq --arg pn "$paramName" -r '.Parameters[] | select(.Name == $pn) | .Value')
+                    echo "sha from param store is: $sha"
+                    if [ "${{ github.event.pull_request.head.sha }}" != "$sha" ]; then
+                      echo "::error::deploying to ${{steps.parse-label.outputs.environment}} but $paramName=$sha does not equal this branch head sha ${{ github.event.pull_request.head.sha }} a previous pipeline command needs to run or a merge from main requires you to start the pipeline process over"
+                      exit 1
+                    fi            
+                    echo "::notice::Current head sha matches that of $paramName so ok to proceed"
+                  fi
+
+    _0_build_test_upload_packages:
+        name: 0. Build Test Upload Packages
+        needs: [_init_check_command]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'PLAN') &&
+            (needs._init_check_command.outputs.environment == 'int') }}
+        permissions:
+            id-token: write
+            contents: write
+        runs-on: ubuntu-latest
+        env:
+            NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            NPM_CONFIG_AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+        timeout-minutes: 15
+        steps:
+            - name: Assume role for OPS AWS acc
+              uses: aws-actions/configure-aws-credentials@v1-node16
+              with:
+                  role-to-assume: ${{ secrets.OIDC_ROLE_ARN_OPS }}
+                  aws-region: ${{ env.AWS_REGION }}
+            - name: Clone Repo
+              id: clone-repo
+              uses: actions/checkout@v3
+              with:
+                  ref: ${{ github.head_ref }}
+            - name: Parse .nvmrc and set Node version
+              id: node-version
+              run: echo "NODE_VERSION=$(cat .nvmrc)" >> $GITHUB_ENV
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                node-version: ${{ env.NODE_VERSION }}
+                cache: 'yarn'
+            - name: "Yarn Install"
+              id: yarn
+              run: yarn install --immutable
+            - name: "Build"
+              id: build
+              run: yarn build
+            - name: "Test"
+              id: test
+              env:
+                  CI: true
+              run: yarn test
+            - name: "Yarn Install Production"
+              id: yarn-production
+              run: yarn workspaces focus --production --all
+            - name: "Publish Lambdas"
+              id: publish-lambda
+              run: yarn publish:lambdas
+            - name: "Publish Bundles"
+              id: publish-bundles
+              run: yarn publish:bundles
+            - name: "Publish CMS"
+              id: publish-cms
+              run: yarn publish:cms
+            - name: "Commit & Push repo updates"
+              id: commit-push-repo-updates
+              if: always()
+              uses: stefanzweifel/git-auto-commit-action@v4
+              with:
+                  commit_message: "Updates from GHA build, test, upload"
+    _1a_plan_ops:
+        name: 1a. Plan OPS (implied on PLAN int)
+        needs: [_init_check_command]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'PLAN') &&
+            (needs._init_check_command.outputs.environment == 'ops') }}
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-ops github-actions-plan"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_OPS }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _1_plan_int:
+        name: 1. Plan INT
+        needs: [_init_check_command, _0_build_test_upload_packages]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'PLAN') &&
+            (needs._init_check_command.outputs.environment == 'int') &&
+            (needs._0_build_test_upload_packages.result == 'success') }}
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-int github-actions-plan"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_INT }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _2a_apply_ops:
+        name: 2. Apply OPS (implied on APPLY int)
+        needs: [_init_check_command]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'APPLY') &&
+            (needs._init_check_command.outputs.environment == 'ops') }}
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-ops github-actions-apply"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_OPS }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _2_apply_int:
+        name: 2. Apply INT
+        needs: [_init_check_command]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'APPLY') &&
+            (needs._init_check_command.outputs.environment == 'int') }}
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-int github-actions-apply"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_INT }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _3_plan_stage:
+        name: 3. Plan STAGE
+        needs: [_init_check_command]
+        if:
+            ${{ (needs._init_check_command.outputs.action == 'plan') &&
+            (needs._init_check_command.outputs.environment == 'stage') }}
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-stage github-actions-plan"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_STAGE }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _4_apply_stage:
+        name: 4. Apply STAGE
+        needs: [_init_check_command]
+        if: needs._init_check_command.outputs.action == 'APPLY' &&
+            needs._init_check_command.outputs.environment == 'stage' #add reviews
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-stage github-actions-apply"
+        secrets:
+            ROLE_TO_ASSUME:
+              ${{ secrets.OIDC_ROLE_ARN_STAGE }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _5_plan_prod:
+        name: 5. Plan Prod
+        needs: [_init_check_command]
+        if:
+            needs._init_check_command.outputs.action == 'PLAN' &&
+            needs._init_check_command.outputs.environment == 'prod'
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-prod github-actions-plan"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_PROD }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _6_apply_prod:
+        name: 6. Apply Prod
+        needs: [_init_check_command]
+        if:
+            needs._init_check_command.outputs.action == 'APPLY' &&
+            needs._init_check_command.outputs.environment == 'prod'
+        uses: ./.github/workflows/deploy.yml
+        with:
+            cmd: "tf-prod github-actions-apply"
+        secrets:
+            ROLE_TO_ASSUME:
+                ${{ secrets.OIDC_ROLE_ARN_PROD }}
+            FINE_GRAINED_PAT: ${{ secrets.FINE_GRAINED_PAT }}
+            AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+    _final:
+        runs-on: ubuntu-latest
+        permissions:
+            id-token: write
+            contents: write
+            pull-requests: write
+            issues: write
+        needs:
+            [
+                _init_check_command,
+                _0_build_test_upload_packages,
+                _1a_plan_ops,
+                _1_plan_int,
+                _2a_apply_ops,
+                _2_apply_int,
+                _3_plan_stage,
+                _4_apply_stage,
+                _5_plan_prod,
+                _6_apply_prod,
+            ]
+        if: ${{ always() }}
+        steps:
+            - name: Clone Repo
+              #note we checkout the repo to get the github sha after packages update commited back to the repo.
+              id: clone-repo
+              uses: actions/checkout@v3
+              with:
+                  ref: ${{ github.head_ref }}
+            - name: Assume role for OPS AWS acc
+              uses: aws-actions/configure-aws-credentials@v1-node16
+              with:
+                  role-to-assume:
+                      ${{ secrets.OIDC_ROLE_ARN_OPS }}
+                  aws-region: ${{ env.AWS_REGION }}
+            - name: Store Current Sha for AWS Env
+              run: |
+                  shaparam=""
+                  if [ "${{ needs._1_plan_int.result }}" == "success" ] || \
+                     [ "${{ needs._2_apply_int.result }}" == "success" ] || \
+                     [ "${{ needs._3_plan_stage.result }}" == "success" ] || \
+                     [ "${{ needs._4_apply_stage.result }}" == "success" ] || \
+                     [ "${{ needs._5_plan_prod.result }}" == "success" ] || \
+                     [ "${{ needs._6_apply_prod.result }}" == "success" ]; then
+                    shaparam="current-sha-space-heyflow-web-${{ needs._init_check_command.outputs.environment }}-${{ needs._init_check_command.outputs.action }}"
+                  fi
+                  if [ "${shaparam}" != "" ]; then
+                    curGitSha=$(git rev-parse HEAD)
+                    aws ssm put-parameter \
+                        --name "${shaparam}" \
+                        --type "String" \
+                        --value "${curGitSha}" \
+                        --overwrite 
+                  fi
+            - uses: actions-ecosystem/action-add-labels@v1
+              if:
+                  ${{ (contains(needs.*.result, 'failure')) ||
+                  (contains(needs.*.result, 'cancelled'))}}
+              with:
+                  labels: "PIPELINE ERROR"
+                  fail_on_error: false
+            - uses: actions-ecosystem/action-remove-labels@v1
+              if:
+                  ${{ (contains(needs.*.result, 'failure')) ||
+                  (contains(needs.*.result, 'cancelled'))}}
+              with:
+                  labels: ${{ github.event.label.name }}
+
+              #if it fails remove trigger label and add Pipeline Error label
+            - name: Merge PR
+              if: ${{ needs._6_apply_prod.result == 'success' }}
+              id: merge-pr
+              uses: actions/github-script@v6
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const msg = `merged ${context.ref}`;
+                      github.rest.pulls.merge({
+                        repo: context.repo.repo,
+                        owner: context.repo.owner,
+                        pull_number: context.issue.number,
+                        commit_title: msg,
+                      });

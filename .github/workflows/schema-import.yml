@@ -1,0 +1,70 @@
+name: Run Backup and Schema Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Select the environment to run the commands"
+        required: true
+        type: choice
+        options:
+          - int
+          - stage
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  run-commands:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set Role Environment Variables
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "int" ]]; then
+            echo "ROLE_ARN=${{ secrets.OIDC_ROLE_ARN_INT }}" >> $GITHUB_ENV
+          elif [[ "${{ github.event.inputs.environment }}" == "stage" ]]; then
+            echo "ROLE_ARN=${{ secrets.OIDC_ROLE_ARN_STAGE }}" >> $GITHUB_ENV
+          else
+            echo "ROLE_ARN=${{ secrets.OIDC_ROLE_ARN_PROD }}" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: eu-west-2
+
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: "Setup NodeJS"
+        id: setup-node
+        uses: actions/setup-node@v4
+        with:
+          registry-url: "https://npm.pkg.github.com"
+          node-version: "18"
+          cache: 'pnpm'
+
+      - name: "Bootstrap"
+        id: pnpm-bootstrap
+        run: |
+          pnpm i --frozen-lockfile --prefer-offline
+        env:
+          NPM_CONFIG_AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+
+      - name: Run Backup Command
+        run: |
+          pnpm run command cms "${{ github.event.inputs.environment }}" --command ./scripts/migration/backup.sh
+
+      - name: Run Schema Import Command
+        run: |
+          pnpm run command cms "${{ github.event.inputs.environment }}" --command ./scripts/schema/import.sh

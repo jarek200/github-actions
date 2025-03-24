@@ -1,0 +1,81 @@
+name: "Aerstudios Deploy Script Reusable Workflow"
+
+on:
+    workflow_call:
+        inputs:
+            cmd:
+                description: "Command to run"
+                type: string
+                required: true
+        secrets:
+            ROLE_TO_ASSUME:
+                required: true
+            FINE_GRAINED_PAT:
+                required: true
+            AERATED_NPM_TOKEN:
+                required: true
+              # TODO - Add more secrets here
+
+env:
+    TF_VERSION: 1.9.5
+    AWS_REGION: eu-west-2
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        #timeout-minutes: 30
+        permissions:
+            id-token: write
+            contents: read
+            pull-requests: write
+        env:
+            NPM_CONFIG_AERATED_NPM_TOKEN: ${{ secrets.AERATED_NPM_TOKEN }}
+        steps:
+            - name: Clone Repo
+              id: clone-repo
+              uses: actions/checkout@v3
+              with:
+                  ref: ${{ github.head_ref }}
+            - name: Parse .nvmrc and set Node version
+              id: node-version
+              run: echo "NODE_VERSION=$(cat .nvmrc)" >> $GITHUB_ENV
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                node-version: ${{ env.NODE_VERSION }}
+                cache: 'yarn'
+            - name: "Yarn Install"
+              id: yarn
+              run: yarn install --immutable
+            - name: Assume role for AWS
+              uses: aws-actions/configure-aws-credentials@v1-node16
+              with:
+                  role-to-assume: ${{ secrets.ROLE_TO_ASSUME }}
+                  aws-region: ${{ env.AWS_REGION }}
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v3
+              with:
+                  terraform_version: ${{ env.TF_VERSION }}
+            - name: "Terraform (CHECK THIS)"
+              id: yarn-deploy
+              env:
+                TF_VAR_GITHUB_TOKEN: ${{ secrets.FINE_GRAINED_PAT }}
+              run: yarn run deploy ${{ inputs.cmd }}
+            - name: "Run Integration Tests"
+              if: ${{ inputs.cmd == 'tf-int github-actions-apply' }}
+              run: yarn test:integration
+            - name: Post Plan to PR
+              id: post-plan-to-pr
+              if:  ${{ contains(inputs.cmd, 'plan') && github.event_name == 'pull_request'  }}
+              uses: actions/github-script@v6
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const runLink = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+                      const msg = `You MUST review the Terraform plan in the Github Actions console and only proceed if you're happy with the changes see: [run ${context.runNumber}](${runLink})`;
+                        github.rest.issues.createComment({
+                          issue_number: context.issue.number,
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          body: msg
+                        });

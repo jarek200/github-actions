@@ -1,0 +1,17 @@
+name: Repository Events
+on:
+  workflow_dispatch:
+#   fork:
+#   watch:
+#     types: [started]  # When someone stars the repo
+#   repository_dispatch:
+#     types: [deploy, test]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Repository Event
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Actor: ${{ github.actor }}" 

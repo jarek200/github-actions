@@ -1,0 +1,27 @@
+name: Issue and PR Events
+on:
+  issues:
+    types: [opened, labeled, closed]
+#   pull_request:
+#     types: [opened, synchronize, labeled, ready_for_review]
+#   pull_request_review:
+#     types: [submitted, edited]
+#   pull_request_review_comment:
+#     types: [created]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.issue.pull_request }}  # Only for regular issues
+    steps:
+      - name: Process Issue Event
+        if: github.event_name == 'issues'
+        run: |
+          echo "Issue #${{ github.event.issue.number }}"
+          echo "Action: ${{ github.event.action }}"
+
+      - name: Process PR Event
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "PR #${{ github.event.pull_request.number }}"
+          echo "Action: ${{ github.event.action }}" 
