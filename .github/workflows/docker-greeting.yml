@@ -9,10 +9,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Debug - List files
+      - name: Debug - List files before
         run: |
+          pwd
           ls -la .github/actions/docker-actions/
           cat .github/actions/docker-actions/entrypoint.sh
+      
+      - name: Set file permissions
+        run: chmod +x .github/actions/docker-actions/entrypoint.sh
       
       - name: Run Docker greeting action
         uses: ./.github/actions/docker-actions

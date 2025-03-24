@@ -1,10 +1,13 @@
 FROM alpine:3.19
 
-# Copy the entrypoint script
-COPY entrypoint.sh /entrypoint.sh
+WORKDIR /app
 
-# Make sure the script is executable
-RUN chmod +x /entrypoint.sh
+# Copy the entrypoint script
+COPY entrypoint.sh .
+
+# Make sure the script is executable and exists
+RUN chmod +x /app/entrypoint.sh && \
+    ls -la /app/entrypoint.sh
 
 # Set the entrypoint
-ENTRYPOINT ["/entrypoint.sh"] 
+ENTRYPOINT ["/app/entrypoint.sh"] 

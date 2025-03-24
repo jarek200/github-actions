@@ -1,7 +1,7 @@
 name: 'Docker Greeting Action'
 description: 'Greets someone using a Docker container'
 inputs:
-  who-to-greet:  # Changed from 'name' to match what we'll pass to the entrypoint
+  who-to-greet:
     description: 'Who to greet'
     required: true
     default: 'World'
