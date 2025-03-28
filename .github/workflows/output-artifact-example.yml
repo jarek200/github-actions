@@ -1,0 +1,63 @@
+name: Output and Artifact Demo
+
+# Trigger manually from the Actions tab
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'An optional identifier for this run'
+        required: false
+        default: 'test-run'
+
+jobs:
+  # Job 1: Generates data, sets an output, and uploads an artifact
+  generate_data:
+    runs-on: ubuntu-latest
+    outputs:
+      # Define an output for this job
+      generated_filename: ${{ steps.create_artifact.outputs.filename }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create data file
+        id: create_artifact # Give the step an ID to reference its outputs
+        run: |
+          FILE_NAME="data-${{ inputs.run_id }}.txt"
+          echo "Generating data for run: ${{ inputs.run_id }}"
+          echo "Current timestamp: $(date)" > $FILE_NAME
+          echo "Some generated content." >> $FILE_NAME
+          echo "Created file: $FILE_NAME"
+          # Set an output for this step (and consequently the job)
+          echo "filename=$FILE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload data file as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-data-artifact # Name of the artifact bundle
+          path: ${{ steps.create_artifact.outputs.filename }} # Path to the file created in the previous step
+
+  # Job 2: Depends on Job 1, downloads the artifact, and uses the output
+  process_data:
+    runs-on: ubuntu-latest
+    needs: [generate_data] # Ensures this job runs only after generate_data succeeds
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download generated data artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-data-artifact # Must match the name used in upload-artifact
+          # path: downloaded_data # Optional: specify a directory to download into
+
+      - name: Process the data
+        run: |
+          # Access the output from the 'generate_data' job
+          FILE_TO_PROCESS="${{ needs.generate_data.outputs.generated_filename }}"
+          echo "Processing data from the previous job."
+          echo "Received filename from generate_data job: $FILE_TO_PROCESS"
+          echo "--- Content of $FILE_TO_PROCESS ---"
+          cat "$FILE_TO_PROCESS"
+          echo "-------------------------------------"
+          echo "Processing complete." 
